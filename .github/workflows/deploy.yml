@@ -1,0 +1,67 @@
+name: Build & Deploy CI4
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: intl, mbstring, json, mysql, curl
+          coverage: none
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install deps
+        run: composer install --no-dev --prefer-dist --no-progress --no-interaction
+
+      - name: CI4 build steps
+        run: |
+          php spark key:generate -n
+          php spark cache:clear -n
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-build
+          path: |
+            .
+            !.git
+            !.github
+            !node_modules
+            !**/.env
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-build
+          path: app
+
+      - name: Deploy via rsync over SSH
+        uses: burnett01/rsync-deployments@5.2
+        with:
+          switches: -avz --delete
+          path: app/
+          remote_path: ${{ secrets.REMOTE_PATH }}   # ej: /home/usuario/domains/tu-dominio/public_html
+          remote_host: ${{ secrets.REMOTE_HOST }}   # ej: sftp.hostinger.com
+          remote_user: ${{ secrets.REMOTE_USER }}
+          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Fix writable perms (opcional)
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ${{ secrets.SSH_PRIVATE_KEY }} ${{ secrets.REMOTE_USER }}@${{ secrets.REMOTE_HOST }} "chmod -R 775 ${{ secrets.REMOTE_PATH }}/writable"
